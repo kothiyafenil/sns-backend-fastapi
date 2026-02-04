@@ -5,7 +5,7 @@ from uuid import uuid4
 
 app = FastAPI(
     title="Smart Nudge System – Intelligent Decision Engine",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # ======================================================
@@ -198,3 +198,29 @@ def predict_for_customer(customer_id: str):
         outstanding=customer.outstanding_payment_amount,
         annoyance=customer.annoyance_level
     )
+
+
+# ======================================================
+# ALL-CUSTOMERS PREDICT ENDPOINT
+# ======================================================
+
+@app.get("/customers/predict_all")
+def predict_all_customers():
+    if not CUSTOMERS_DB:
+        raise HTTPException(status_code=404, detail="No customers found")
+
+    results = []
+    for customer in CUSTOMERS_DB:
+        decision = generate_recommendation(
+            credit_score=customer.credit_score,
+            debt_ratio=customer.debt_ratio,
+            outstanding=customer.outstanding_payment_amount,
+            annoyance=customer.annoyance_level
+        )
+        results.append({
+            "customer_id": customer.id,
+            "name": customer.name,
+            **decision
+        })
+
+    return results
