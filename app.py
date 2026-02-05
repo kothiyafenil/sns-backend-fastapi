@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from uuid import uuid4
 from datetime import datetime
@@ -42,7 +42,6 @@ FEATURES = ["credit_score", "debt_ratio", "outstanding_payment_amount", "annoyan
 
 
 def train_initial_model():
-    print("🤖 AI Engine: Training model with initial patterns...")
     data = pd.DataFrame([
         [800, 0.1, 100, 1, 0], [750, 0.2, 500, 1, 0],
         [620, 0.4, 2000, 3, 1], [580, 0.5, 3000, 2, 1],
@@ -55,10 +54,7 @@ def train_initial_model():
     return model
 
 
-if os.path.exists(MODEL_PATH):
-    ml_brain = joblib.load(MODEL_PATH)
-else:
-    ml_brain = train_initial_model()
+ml_brain = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else train_initial_model()
 
 
 # ======================================================
@@ -76,20 +72,21 @@ class CustomerCreate(BaseModel):
 class CustomerResponse(CustomerCreate):
     id: str
     created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ======================================================
 # API ENDPOINTS
 # ======================================================
-app = FastAPI(title="Smart Nudge AI Engine", version="2.1.0")
+app = FastAPI(title="Smart Nudge AI Engine", version="3.0.0")
 
 
 @app.get("/")
 def health():
-    return {"status": "AI Engine is Live 🚀"}
+    return {"status": "AI Engine is Live 🚀", "timestamp": datetime.now()}
 
 
-# 1. ADD CUSTOMER (POST)
+# ADD CUSTOMER
 @app.post("/customers", response_model=CustomerResponse)
 def add_customer(customer: CustomerCreate):
     db = SessionLocal()
@@ -103,25 +100,23 @@ def add_customer(customer: CustomerCreate):
         db.close()
 
 
-# 2. VIEW ALL CUSTOMERS (GET) - THIS WAS MISSING
+# VIEW ALL CUSTOMERS
 @app.get("/customers", response_model=List[CustomerResponse])
 def get_all_customers():
     db = SessionLocal()
     try:
-        customers = db.query(CustomerDB).all()
-        return customers
+        return db.query(CustomerDB).all()
     finally:
         db.close()
 
 
-# 3. PREDICT ALL CUSTOMERS (GET)
+# PREDICT ALL (Now with Date & Time!)
 @app.get("/customers/predict_all")
 def predict_all():
     db = SessionLocal()
     try:
         customers = db.query(CustomerDB).all()
-        if not customers:
-            return []
+        if not customers: return []
 
         results = []
         for c in customers:
@@ -139,24 +134,13 @@ def predict_all():
             policy = mapping[risk_class]
 
             results.append({
+                "customer_id": c.id,
                 "name": c.name,
+                "added_on": c.created_at.strftime("%Y-%m-%d %H:%M:%S"),  # Formatted Date
                 "ml_risk_level": policy["level"],
                 "ml_confidence": f"{confidence}%",
-                "action": policy
+                "recommendation": policy
             })
         return results
-    finally:
-        db.close()
-
-
-# 4. GET SINGLE CUSTOMER (GET)
-@app.get("/customers/{customer_id}", response_model=CustomerResponse)
-def get_customer(customer_id: str):
-    db = SessionLocal()
-    try:
-        customer = db.query(CustomerDB).filter(CustomerDB.id == customer_id).first()
-        if not customer:
-            raise HTTPException(status_code=404, detail="Customer not found")
-        return customer
     finally:
         db.close()
