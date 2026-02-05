@@ -1,26 +1,82 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional, List
 from uuid import uuid4
+from datetime import datetime
+import pandas as pd
+import joblib
+import os
 
-app = FastAPI(
-    title="Smart Nudge System – Intelligent Decision Engine",
-    version="1.1.0"
-)
+from sklearn.ensemble import RandomForestClassifier
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ======================================================
-# DATA MODELS
+# DATABASE SETUP
 # ======================================================
-
-class PredictRequest(BaseModel):
-    credit_score: int
-    debt_ratio: float
-    outstanding_payment_amount: float
-    annoyance_level: int
+DATABASE_URL = "sqlite:///./customers.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
 
 
-class Customer(BaseModel):
-    id: Optional[str] = None
+class CustomerDB(Base):
+    __tablename__ = "customers"
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String)
+    phone = Column(String)
+    credit_score = Column(Integer)
+    debt_ratio = Column(Float)
+    outstanding_payment_amount = Column(Float)
+    annoyance_level = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Base.metadata.create_all(bind=engine)
+
+# ======================================================
+# MACHINE LEARNING ENGINE (True ML Logic)
+# ======================================================
+MODEL_PATH = "nudge_model.joblib"
+FEATURES = ["credit_score", "debt_ratio", "outstanding_payment_amount", "annoyance_level"]
+
+
+def train_system():
+    """Trains the model on behavioral patterns instead of hard-coded IF statements"""
+    print("🤖 Machine Learning Engine: Analyzing patterns and training...")
+
+    # Historical training data (Synthetic)
+    # [credit, debt, amount, annoyance, target_risk]
+    data = pd.DataFrame([
+        [800, 0.1, 100, 1, 0],  # Low Risk (0)
+        [720, 0.2, 500, 2, 0],  # Low Risk
+        [650, 0.4, 2000, 3, 1],  # Medium Risk (1)
+        [580, 0.5, 3000, 4, 1],  # Medium Risk
+        [400, 0.8, 6000, 5, 2],  # High Risk (2)
+        [350, 0.9, 8500, 4, 2],  # High Risk
+    ], columns=FEATURES + ["risk_class"])
+
+    X = data[FEATURES]
+    y = data["risk_class"]
+
+    # Random Forest uses multiple decision trees to find the 'strongest' path
+    clf = RandomForestClassifier(n_estimators=100, random_state=42)
+    clf.fit(X, y)
+    joblib.dump(clf, MODEL_PATH)
+    return clf
+
+
+# Load or Train on startup
+if os.path.exists(MODEL_PATH):
+    ml_brain = joblib.load(MODEL_PATH)
+else:
+    ml_brain = train_system()
+
+
+# ======================================================
+# SCHEMAS
+# ======================================================
+class CustomerCreate(BaseModel):
     name: str
     phone: str
     credit_score: int
@@ -29,198 +85,90 @@ class Customer(BaseModel):
     annoyance_level: int
 
 
-# ======================================================
-# IN-MEMORY DATABASE (FOR DISSERTATION / DEMO)
-# ======================================================
-
-CUSTOMERS_DB: List[Customer] = []
+class CustomerResponse(CustomerCreate):
+    id: str
+    created_at: datetime
 
 
 # ======================================================
-# ROOT
+# API ENDPOINTS
 # ======================================================
+app = FastAPI(title="Smart Nudge AI Engine", version="2.0.0")
+
 
 @app.get("/")
-def root():
-    return {"status": "FastAPI is running 🚀"}
+def health():
+    return {"status": "AI Engine Online 🧠"}
 
 
-# ======================================================
-# CUSTOMER MANAGEMENT ENDPOINTS
-# ======================================================
+@app.post("/customers", response_model=CustomerResponse)
+def add_customer(customer: CustomerCreate):
+    db = SessionLocal()
+    try:
+        db_customer = CustomerDB(id=str(uuid4()), **customer.model_dump())
+        db.add(db_customer)
+        db.commit()
+        db.refresh(db_customer)
+        return db_customer
+    finally:
+        db.close()
 
-@app.post("/customers")
-def add_customer(customer: Customer):
-    customer.id = str(uuid4())
-    CUSTOMERS_DB.append(customer)
-    return customer
-
-
-@app.get("/customers")
-def get_customers():
-    return CUSTOMERS_DB
-
-
-@app.get("/customers/{customer_id}")
-def get_customer(customer_id: str):
-    customer = next((c for c in CUSTOMERS_DB if c.id == customer_id), None)
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
-    return customer
-
-
-# ======================================================
-# INTELLIGENT SCORING ENGINE
-# ======================================================
-
-def compute_scores(
-    credit_score: int,
-    debt_ratio: float,
-    outstanding: float,
-    annoyance: int
-):
-    # Financial risk (payment default probability proxy)
-    financial_risk = (
-        (1 - credit_score / 900) * 0.4 +
-        debt_ratio * 0.35 +
-        min(outstanding / 5000, 1) * 0.25
-    )
-
-    # Engagement probability
-    engagement_score = (
-        (credit_score / 900) * 0.5 +
-        (1 - debt_ratio) * 0.3 +
-        (1 - annoyance / 5) * 0.2
-    )
-
-    # Communication fatigue & uninstall risk
-    fatigue_risk = (
-        annoyance * 0.6 +
-        financial_risk * 0.4
-    )
-
-    return financial_risk, engagement_score, fatigue_risk
-
-
-# ======================================================
-# POLICY DECISION ENGINE
-# ======================================================
-
-def generate_recommendation(
-    credit_score: int,
-    debt_ratio: float,
-    outstanding: float,
-    annoyance: int
-):
-    financial_risk, engagement, fatigue = compute_scores(
-        credit_score, debt_ratio, outstanding, annoyance
-    )
-
-    # ---------------- CHANNEL SELECTION ----------------
-    if fatigue > 0.65:
-        channel = "Email"            # least intrusive
-    elif financial_risk > 0.7:
-        channel = "SMS"              # urgency dominates
-    else:
-        channel = "WhatsApp"         # balanced engagement
-
-    # ---------------- MESSAGE TYPE ----------------
-    if engagement < 0.4:
-        message_type = "Text"
-    elif engagement < 0.7:
-        message_type = "Image"
-    else:
-        message_type = "Video"
-
-    # ---------------- MESSAGE TONE ----------------
-    if financial_risk > 0.75 and annoyance < 2:
-        tone = "Firm"
-    elif fatigue > 0.6:
-        tone = "Soft"
-    else:
-        tone = "Empathetic"
-
-    # ---------------- MESSAGE TIMING ----------------
-    if channel == "SMS":
-        message_time = "Morning"
-    elif channel == "WhatsApp":
-        message_time = "Evening"
-    else:
-        message_time = "Afternoon"
-
-    # ---------------- RISK LABEL ----------------
-    if financial_risk >= 0.7:
-        risk_level = "High"
-    elif financial_risk >= 0.4:
-        risk_level = "Medium"
-    else:
-        risk_level = "Low"
-
-    return {
-        "risk_level": risk_level,
-        "financial_risk_score": round(financial_risk, 2),
-        "engagement_score": round(engagement, 2),
-        "fatigue_risk_score": round(fatigue, 2),
-        "recommended_channel": channel,
-        "recommended_message_time": message_time,
-        "recommended_message_tone": tone,
-        "recommended_message_type": message_type
-    }
-
-
-# ======================================================
-# GENERIC PREDICT ENDPOINT
-# ======================================================
-
-@app.post("/predict")
-def predict(request: PredictRequest):
-    return generate_recommendation(
-        credit_score=request.credit_score,
-        debt_ratio=request.debt_ratio,
-        outstanding=request.outstanding_payment_amount,
-        annoyance=request.annoyance_level
-    )
-
-
-# ======================================================
-# CUSTOMER-BASED PREDICT ENDPOINT
-# ======================================================
-
-@app.post("/customers/{customer_id}/predict")
-def predict_for_customer(customer_id: str):
-    customer = next((c for c in CUSTOMERS_DB if c.id == customer_id), None)
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
-
-    return generate_recommendation(
-        credit_score=customer.credit_score,
-        debt_ratio=customer.debt_ratio,
-        outstanding=customer.outstanding_payment_amount,
-        annoyance=customer.annoyance_level
-    )
-
-
-# ======================================================
-# ALL-CUSTOMERS PREDICT ENDPOINT
-# ======================================================
 
 @app.get("/customers/predict_all")
-def predict_all_customers():
-    if not CUSTOMERS_DB:
-        raise HTTPException(status_code=404, detail="No customers found")
+def predict_all():
+    db = SessionLocal()
+    try:
+        customers = db.query(CustomerDB).all()
+        if not customers:
+            return []
 
-    results = []
-    for customer in CUSTOMERS_DB:
-        decision = generate_recommendation(
-            credit_score=customer.credit_score,
-            debt_ratio=customer.debt_ratio,
-            outstanding=customer.outstanding_payment_amount,
-            annoyance=customer.annoyance_level
-        )
-        results.append({
-            "customer_id": customer.id,
-            "name": customer.name,
-            **decision
-        })
+        results = []
+        for c in customers:
+            # 1. Transform DB data for the AI
+            input_data = pd.DataFrame([[
+                c.credit_score, c.debt_ratio, c.outstanding_payment_amount, c.annoyance_level
+            ]], columns=FEATURES)
 
-    return results
+            # 2. Strong Logic: Get Probability Distribution
+            # This shows how 'sure' the model is about each risk level
+            prob_dist = ml_brain.predict_proba(input_data)[0]
+            risk_class = int(ml_brain.predict(input_data)[0])
+            confidence = round(max(prob_dist) * 100, 2)
+
+            # 3. Dynamic Policy Mapping
+            mapping = {
+                2: {"risk": "High", "channel": "Direct SMS", "tone": "Formal/Firm", "content": "Payment Link"},
+                1: {"risk": "Medium", "channel": "WhatsApp", "tone": "Empathetic", "content": "Educational Video"},
+                0: {"risk": "Low", "channel": "Email", "tone": "Friendly", "content": "Soft Reminder"}
+            }
+            policy = mapping[risk_class]
+
+            results.append({
+                "customer_id": c.id,
+                "name": c.name,
+                "ai_decision": {
+                    "risk_level": policy["risk"],
+                    "confidence_score": f"{confidence}%",
+                    "recommended_action": {
+                        "channel": policy["channel"],
+                        "tone": policy["tone"],
+                        "content_type": policy["content"]
+                    },
+                    "scheduled_time": "Morning" if datetime.now().hour < 12 else "Evening"
+                }
+            })
+        return results
+    finally:
+        db.close()
+
+
+@app.get("/customers/{customer_id}", response_model=CustomerResponse)
+def get_customer(customer_id: str):
+    db = SessionLocal()
+    try:
+        customer = db.query(CustomerDB).filter(CustomerDB.id == customer_id).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Not found")
+        return customer
+    finally:
+        db.close()
