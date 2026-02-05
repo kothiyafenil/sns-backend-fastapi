@@ -35,42 +35,30 @@ class CustomerDB(Base):
 Base.metadata.create_all(bind=engine)
 
 # ======================================================
-# MACHINE LEARNING ENGINE (True ML Logic)
+# ML ENGINE SETUP
 # ======================================================
 MODEL_PATH = "nudge_model.joblib"
 FEATURES = ["credit_score", "debt_ratio", "outstanding_payment_amount", "annoyance_level"]
 
 
-def train_system():
-    """Trains the model on behavioral patterns instead of hard-coded IF statements"""
-    print("🤖 Machine Learning Engine: Analyzing patterns and training...")
-
-    # Historical training data (Synthetic)
-    # [credit, debt, amount, annoyance, target_risk]
+def train_initial_model():
+    print("🤖 AI Engine: Training model with initial patterns...")
     data = pd.DataFrame([
-        [800, 0.1, 100, 1, 0],  # Low Risk (0)
-        [720, 0.2, 500, 2, 0],  # Low Risk
-        [650, 0.4, 2000, 3, 1],  # Medium Risk (1)
-        [580, 0.5, 3000, 4, 1],  # Medium Risk
-        [400, 0.8, 6000, 5, 2],  # High Risk (2)
-        [350, 0.9, 8500, 4, 2],  # High Risk
-    ], columns=FEATURES + ["risk_class"])
-
-    X = data[FEATURES]
-    y = data["risk_class"]
-
-    # Random Forest uses multiple decision trees to find the 'strongest' path
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X, y)
-    joblib.dump(clf, MODEL_PATH)
-    return clf
+        [800, 0.1, 100, 1, 0], [750, 0.2, 500, 1, 0],
+        [620, 0.4, 2000, 3, 1], [580, 0.5, 3000, 2, 1],
+        [450, 0.8, 6000, 5, 2], [350, 0.9, 8000, 4, 2],
+    ], columns=FEATURES + ["target"])
+    X, y = data[FEATURES], data["target"]
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    joblib.dump(model, MODEL_PATH)
+    return model
 
 
-# Load or Train on startup
 if os.path.exists(MODEL_PATH):
     ml_brain = joblib.load(MODEL_PATH)
 else:
-    ml_brain = train_system()
+    ml_brain = train_initial_model()
 
 
 # ======================================================
@@ -93,14 +81,15 @@ class CustomerResponse(CustomerCreate):
 # ======================================================
 # API ENDPOINTS
 # ======================================================
-app = FastAPI(title="Smart Nudge AI Engine", version="2.0.0")
+app = FastAPI(title="Smart Nudge AI Engine", version="2.1.0")
 
 
 @app.get("/")
 def health():
-    return {"status": "AI Engine Online 🧠"}
+    return {"status": "AI Engine is Live 🚀"}
 
 
+# 1. ADD CUSTOMER (POST)
 @app.post("/customers", response_model=CustomerResponse)
 def add_customer(customer: CustomerCreate):
     db = SessionLocal()
@@ -114,6 +103,18 @@ def add_customer(customer: CustomerCreate):
         db.close()
 
 
+# 2. VIEW ALL CUSTOMERS (GET) - THIS WAS MISSING
+@app.get("/customers", response_model=List[CustomerResponse])
+def get_all_customers():
+    db = SessionLocal()
+    try:
+        customers = db.query(CustomerDB).all()
+        return customers
+    finally:
+        db.close()
+
+
+# 3. PREDICT ALL CUSTOMERS (GET)
 @app.get("/customers/predict_all")
 def predict_all():
     db = SessionLocal()
@@ -124,51 +125,38 @@ def predict_all():
 
         results = []
         for c in customers:
-            # 1. Transform DB data for the AI
-            input_data = pd.DataFrame([[
-                c.credit_score, c.debt_ratio, c.outstanding_payment_amount, c.annoyance_level
-            ]], columns=FEATURES)
-
-            # 2. Strong Logic: Get Probability Distribution
-            # This shows how 'sure' the model is about each risk level
-            prob_dist = ml_brain.predict_proba(input_data)[0]
-            risk_class = int(ml_brain.predict(input_data)[0])
+            input_df = pd.DataFrame([[c.credit_score, c.debt_ratio, c.outstanding_payment_amount, c.annoyance_level]],
+                                    columns=FEATURES)
+            risk_class = int(ml_brain.predict(input_df)[0])
+            prob_dist = ml_brain.predict_proba(input_df)[0]
             confidence = round(max(prob_dist) * 100, 2)
 
-            # 3. Dynamic Policy Mapping
             mapping = {
-                2: {"risk": "High", "channel": "Direct SMS", "tone": "Formal/Firm", "content": "Payment Link"},
-                1: {"risk": "Medium", "channel": "WhatsApp", "tone": "Empathetic", "content": "Educational Video"},
-                0: {"risk": "Low", "channel": "Email", "tone": "Friendly", "content": "Soft Reminder"}
+                2: {"level": "High", "chan": "SMS", "tone": "Firm"},
+                1: {"level": "Medium", "chan": "WhatsApp", "tone": "Empathetic"},
+                0: {"level": "Low", "chan": "Email", "tone": "Friendly"}
             }
             policy = mapping[risk_class]
 
             results.append({
-                "customer_id": c.id,
                 "name": c.name,
-                "ai_decision": {
-                    "risk_level": policy["risk"],
-                    "confidence_score": f"{confidence}%",
-                    "recommended_action": {
-                        "channel": policy["channel"],
-                        "tone": policy["tone"],
-                        "content_type": policy["content"]
-                    },
-                    "scheduled_time": "Morning" if datetime.now().hour < 12 else "Evening"
-                }
+                "ml_risk_level": policy["level"],
+                "ml_confidence": f"{confidence}%",
+                "action": policy
             })
         return results
     finally:
         db.close()
 
 
+# 4. GET SINGLE CUSTOMER (GET)
 @app.get("/customers/{customer_id}", response_model=CustomerResponse)
 def get_customer(customer_id: str):
     db = SessionLocal()
     try:
         customer = db.query(CustomerDB).filter(CustomerDB.id == customer_id).first()
         if not customer:
-            raise HTTPException(status_code=404, detail="Not found")
+            raise HTTPException(status_code=404, detail="Customer not found")
         return customer
     finally:
         db.close()
