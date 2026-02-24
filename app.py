@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import List
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import joblib
 import os
@@ -12,9 +12,9 @@ from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ======================================================
-# DATABASE SETUP
+# DATABASE SETUP (Persistent)
 # ======================================================
-DATABASE_URL = "sqlite:///./customers.db"
+DATABASE_URL = "sqlite:///./financial_wellness.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -23,12 +23,13 @@ Base = declarative_base()
 class CustomerDB(Base):
     __tablename__ = "customers"
     id = Column(String, primary_key=True, index=True)
-    name = Column(String)
+    name = Column(String)  # Name is included
     phone = Column(String)
     credit_score = Column(Integer)
     debt_ratio = Column(Float)
     outstanding_payment_amount = Column(Float)
     annoyance_level = Column(Integer)
+    due_date = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -61,33 +62,23 @@ ml_brain = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else train_init
 # SCHEMAS
 # ======================================================
 class CustomerCreate(BaseModel):
-    name: str
+    name: str  # Name is required
     phone: str
     credit_score: int
     debt_ratio: float
     outstanding_payment_amount: float
     annoyance_level: int
-
-
-class CustomerResponse(CustomerCreate):
-    id: str
-    created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
+    due_date: datetime
 
 
 # ======================================================
 # API ENDPOINTS
 # ======================================================
-app = FastAPI(title="Smart Nudge AI Engine", version="3.0.0")
+app = FastAPI(title="Financial Wellness AI", version="4.2.0")
 
 
-@app.get("/")
-def health():
-    return {"status": "AI Engine is Live 🚀", "timestamp": datetime.now()}
-
-
-# ADD CUSTOMER
-@app.post("/customers", response_model=CustomerResponse)
+# 1. ADD CUSTOMER
+@app.post("/customers")
 def add_customer(customer: CustomerCreate):
     db = SessionLocal()
     try:
@@ -95,13 +86,13 @@ def add_customer(customer: CustomerCreate):
         db.add(db_customer)
         db.commit()
         db.refresh(db_customer)
-        return db_customer
+        return {"message": "Customer Added", "id": db_customer.id}
     finally:
         db.close()
 
 
-# VIEW ALL CUSTOMERS
-@app.get("/customers", response_model=List[CustomerResponse])
+# 2. GET ALL CUSTOMERS (So your data is never lost)
+@app.get("/customers")
 def get_all_customers():
     db = SessionLocal()
     try:
@@ -110,36 +101,41 @@ def get_all_customers():
         db.close()
 
 
-# PREDICT ALL (Now with Date & Time!)
+# 3. PREDICT ALL (With ML Confidence and Risk Level)
 @app.get("/customers/predict_all")
 def predict_all():
     db = SessionLocal()
     try:
         customers = db.query(CustomerDB).all()
-        if not customers: return []
-
         results = []
+        now = datetime.utcnow()
+
         for c in customers:
             input_df = pd.DataFrame([[c.credit_score, c.debt_ratio, c.outstanding_payment_amount, c.annoyance_level]],
                                     columns=FEATURES)
             risk_class = int(ml_brain.predict(input_df)[0])
-            prob_dist = ml_brain.predict_proba(input_df)[0]
-            confidence = round(max(prob_dist) * 100, 2)
+            prob = ml_brain.predict_proba(input_df)[0]
 
             mapping = {
-                2: {"level": "High", "chan": "SMS", "tone": "Firm"},
-                1: {"level": "Medium", "chan": "WhatsApp", "tone": "Empathetic"},
-                0: {"level": "Low", "chan": "Email", "tone": "Friendly"}
+                2: {"level": "High", "chan": "SMS", "tone": "Firm", "days": 2},
+                1: {"level": "Medium", "chan": "WhatsApp", "tone": "Empathetic", "days": 5},
+                0: {"level": "Low", "chan": "Email", "tone": "Friendly", "days": 10}
             }
             policy = mapping[risk_class]
+            sched_time = (c.due_date - timedelta(days=policy["days"])).replace(hour=9, minute=0)
 
             results.append({
                 "customer_id": c.id,
                 "name": c.name,
-                "added_on": c.created_at.strftime("%Y-%m-%d %H:%M:%S"),  # Formatted Date
+                "added_on": c.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 "ml_risk_level": policy["level"],
-                "ml_confidence": f"{confidence}%",
-                "recommendation": policy
+                "ml_confidence": f"{round(max(prob) * 100, 1)}%",
+                "recommendation": {
+                    "level": policy["level"],
+                    "chan": policy["chan"],
+                    "tone": policy["tone"],
+                    "scheduled_for": sched_time.strftime("%Y-%m-%d %H:%M:%S")
+                }
             })
         return results
     finally:
