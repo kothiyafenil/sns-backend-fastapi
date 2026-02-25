@@ -12,20 +12,17 @@ from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ======================================================
-# DATABASE SETUP (Live-Ready for Render Disks)
+# DATABASE SETUP (Free Cloud Persistence)
 # ======================================================
-# On Render, we will mount a disk to /app/data.
-# If we are local, it just uses the current folder.
-IS_RENDER = os.getenv("RENDER", False)
-if IS_RENDER:
-    # This path is inside the persistent Render Disk
-    DATABASE_URL = "sqlite:////opt/render/project/src/data/financial_wellness.db"
-    # Ensure the directory exists
-    os.makedirs("/opt/render/project/src/data", exist_ok=True)
-else:
-    DATABASE_URL = "sqlite:///./financial_wellness.db"
+# This looks for a 'DATABASE_URL' in your environment variables.
+# If it's not there (like in PyCharm), it uses a local file.
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./financial_wellness.db")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Fix for Heroku/Render/Railway Postgres URLs
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -48,12 +45,7 @@ Base.metadata.create_all(bind=engine)
 # ======================================================
 # ML ENGINE SETUP
 # ======================================================
-# We also move the model to the data folder so it doesn't disappear
-if IS_RENDER:
-    MODEL_PATH = "/opt/render/project/src/data/nudge_model.joblib"
-else:
-    MODEL_PATH = "nudge_model.joblib"
-
+MODEL_PATH = "nudge_model.joblib"
 FEATURES = ["credit_score", "debt_ratio", "outstanding_payment_amount", "annoyance_level"]
 
 
@@ -72,10 +64,12 @@ def train_initial_model():
 
 ml_brain = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else train_initial_model()
 
+# ======================================================
+# API ENDPOINTS
+# ======================================================
+app = FastAPI(title="Financial Wellness AI", version="4.4.0")
 
-# ======================================================
-# SCHEMAS & API
-# ======================================================
+
 class CustomerCreate(BaseModel):
     name: str
     phone: str
@@ -84,9 +78,6 @@ class CustomerCreate(BaseModel):
     outstanding_payment_amount: float
     annoyance_level: int
     due_date: datetime
-
-
-app = FastAPI(title="Financial Wellness AI", version="4.3.0")
 
 
 @app.post("/customers")
