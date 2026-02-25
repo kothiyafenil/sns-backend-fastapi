@@ -7,3 +7,4 @@ pandas
 scikit-learn
 sqlalchemy
 joblib
+psycopg2-binary
