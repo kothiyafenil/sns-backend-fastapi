@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing import List
 from uuid import uuid4
 from datetime import datetime, timedelta
@@ -12,9 +12,19 @@ from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ======================================================
-# DATABASE SETUP (Persistent)
+# DATABASE SETUP (Live-Ready for Render Disks)
 # ======================================================
-DATABASE_URL = "sqlite:///./financial_wellness.db"
+# On Render, we will mount a disk to /app/data.
+# If we are local, it just uses the current folder.
+IS_RENDER = os.getenv("RENDER", False)
+if IS_RENDER:
+    # This path is inside the persistent Render Disk
+    DATABASE_URL = "sqlite:////opt/render/project/src/data/financial_wellness.db"
+    # Ensure the directory exists
+    os.makedirs("/opt/render/project/src/data", exist_ok=True)
+else:
+    DATABASE_URL = "sqlite:///./financial_wellness.db"
+
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -23,7 +33,7 @@ Base = declarative_base()
 class CustomerDB(Base):
     __tablename__ = "customers"
     id = Column(String, primary_key=True, index=True)
-    name = Column(String)  # Name is included
+    name = Column(String)
     phone = Column(String)
     credit_score = Column(Integer)
     debt_ratio = Column(Float)
@@ -38,7 +48,12 @@ Base.metadata.create_all(bind=engine)
 # ======================================================
 # ML ENGINE SETUP
 # ======================================================
-MODEL_PATH = "nudge_model.joblib"
+# We also move the model to the data folder so it doesn't disappear
+if IS_RENDER:
+    MODEL_PATH = "/opt/render/project/src/data/nudge_model.joblib"
+else:
+    MODEL_PATH = "nudge_model.joblib"
+
 FEATURES = ["credit_score", "debt_ratio", "outstanding_payment_amount", "annoyance_level"]
 
 
@@ -59,10 +74,10 @@ ml_brain = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else train_init
 
 
 # ======================================================
-# SCHEMAS
+# SCHEMAS & API
 # ======================================================
 class CustomerCreate(BaseModel):
-    name: str  # Name is required
+    name: str
     phone: str
     credit_score: int
     debt_ratio: float
@@ -71,13 +86,9 @@ class CustomerCreate(BaseModel):
     due_date: datetime
 
 
-# ======================================================
-# API ENDPOINTS
-# ======================================================
-app = FastAPI(title="Financial Wellness AI", version="4.2.0")
+app = FastAPI(title="Financial Wellness AI", version="4.3.0")
 
 
-# 1. ADD CUSTOMER
 @app.post("/customers")
 def add_customer(customer: CustomerCreate):
     db = SessionLocal()
@@ -91,7 +102,6 @@ def add_customer(customer: CustomerCreate):
         db.close()
 
 
-# 2. GET ALL CUSTOMERS (So your data is never lost)
 @app.get("/customers")
 def get_all_customers():
     db = SessionLocal()
@@ -101,15 +111,12 @@ def get_all_customers():
         db.close()
 
 
-# 3. PREDICT ALL (With ML Confidence and Risk Level)
 @app.get("/customers/predict_all")
 def predict_all():
     db = SessionLocal()
     try:
         customers = db.query(CustomerDB).all()
         results = []
-        now = datetime.utcnow()
-
         for c in customers:
             input_df = pd.DataFrame([[c.credit_score, c.debt_ratio, c.outstanding_payment_amount, c.annoyance_level]],
                                     columns=FEATURES)
